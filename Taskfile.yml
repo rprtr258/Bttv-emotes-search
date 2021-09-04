@@ -1,0 +1,42 @@
+version: '3'
+
+tasks:
+  collect_raw:
+    sources:
+      - collect_raw.py
+      - requirements.txt
+    cmds:
+      - ./venv/Scripts/python collect_raw.py
+
+  status:
+    desc: See how many queries have completed
+    cmds:
+      - ls | grep .js | wc -l
+
+  save_empty:
+    desc: Save list of empty query results as `empty_list.txt`
+    generates: [empty_list.txt]
+    cmds:
+      - grep '{}' . -rl | rg "^\./_['\w]{3}\.json$" | awk '{print substr($0,3)}' > empty_list.txt
+
+  clear:
+    desc: Clear query results
+    cmds:
+      - bash clear.sh
+
+  union:
+    desc: Unite all query results in *.json files into `data.json`
+    sources:
+      - union.py
+      - requirements.txt
+    cmds:
+      - ./venv/Scripts/python union.py
+
+  collect:
+    desc: Run emotes data collection pipeline
+    cmds:
+      - task: collect_raw
+      - task: save_empty
+      - task: union
+      - task: clear
+
