@@ -2,11 +2,8 @@ version: '3'
 
 tasks:
   collect_raw:
-    sources:
-      - collect_raw.py
-      - requirements.txt
     cmds:
-      - ./venv/Scripts/python collect_raw.py
+      - go run collect_raw.go
 
   status:
     desc: See how many queries have completed
