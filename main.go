@@ -28,28 +28,33 @@ func emote_query_url(query string, offset uint) string {
 	return fmt.Sprintf("https://api.betterttv.net/3/emotes/shared/search?query=%s&offset=%d&limit=%d", query, offset, bttvPageSize)
 }
 
+func doRequest(semaphore Semaphore, query string, offset uint) (*http.Response, []byte, error) {
+	<-semaphore // acquire
+	defer func() {
+		semaphore <- struct{}{} // release
+	}()
+	response, err := http.Get(emote_query_url(query, offset))
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	response.Body.Close()
+	return response, data, nil
+}
+
 // TODO: remove sync.Map, return maps, then gather them
 func find_emotes(query string, mp *sync.Map, semaphore Semaphore) {
 	offset := uint(0)
 	for {
-		<-semaphore // acquire
-		response, err := http.Get(emote_query_url(query, offset))
+		response, data, err := doRequest(semaphore, query, offset)
 		if err != nil {
-			log.Println(query, err)
-			semaphore <- struct{}{} // release
 			// TODO: fix too fast gathering
-			time.Sleep(time.Second * 2)
-			continue
-		}
-		data, err := ioutil.ReadAll(response.Body)
-		if err != nil {
 			log.Println(query, err)
-			semaphore <- struct{}{} // release
 			time.Sleep(time.Second * 2)
-			continue
 		}
-		response.Body.Close()
-		semaphore <- struct{}{} // release
 
 		if response.Header.Get("content-type") == "application/json; charset=utf-8" {
 			v := []struct {
@@ -71,12 +76,14 @@ func find_emotes(query string, mp *sync.Map, semaphore Semaphore) {
 				}
 				mp.Store(x.Code, append(lst.([]string), x.ID))
 			}
-			if len(v) < 100 {
+			if len(v) < bttvPageSize {
 				break
 			}
 			offset += bttvPageSize
-		} else {
+		} else if response.StatusCode == http.StatusTooManyRequests {
 			time.Sleep(time.Second * 2)
+		} else {
+			log.Println(response)
 		}
 	}
 }
