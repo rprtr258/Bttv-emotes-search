@@ -16,13 +16,21 @@ const (
 	ulimit       = 500 // max number of open file descriptors
 )
 
-type Semaphore chan struct{}
+type HTTPResponse struct {
+	Method  string              `json:"method"`
+	Path    string              `json:"path"`
+	Args    map[string][]string `json:"args"`
+	Data    string              `json:"data"`
+	Headers map[string]string   `json:"headers"`
+}
 
-// func emote_gifs_urls_by_id(id string) (string, string, string) {
-// 	return fmt.Sprintf("https://cdn.betterttv.net/emote/{id}/1x"),
-// 		fmt.Sprintf("https://cdn.betterttv.net/emote/{id}/2x"),
-// 		fmt.Sprintf("https://cdn.betterttv.net/emote/{id}/3x")
-// }
+type requestError struct {
+	Query        string       `json:"query"`
+	HTTPResponse HTTPResponse `json:"http_response"`
+	Error        string       `json:"error"`
+}
+
+type Semaphore chan struct{}
 
 func emote_query_url(query string, offset uint) string {
 	return fmt.Sprintf("https://api.betterttv.net/3/emotes/shared/search?query=%s&offset=%d&limit=%d", query, offset, bttvPageSize)
@@ -45,14 +53,36 @@ func doRequest(semaphore Semaphore, query string, offset uint) (*http.Response, 
 	return response, data, nil
 }
 
-// TODO: remove sync.Map, return maps, then gather them
-func find_emotes(query string, mp *sync.Map, semaphore Semaphore) {
+func safeJSONMarshal[A any](v A) string {
+	res, err := json.Marshal(v)
+	if err != nil {
+		// TODO: escape json string
+		panic(fmt.Sprintf("error marshaling %+v: %s", v, err.Error()))
+	}
+	return string(res)
+}
+
+func find_emotes(query string, semaphore Semaphore) {
 	offset := uint(0)
 	for {
 		response, data, err := doRequest(semaphore, query, offset)
 		if err != nil {
 			// TODO: fix too fast gathering
-			log.Println(query, err)
+			headers := make(map[string]string, len(response.Header))
+			for header, values := range response.Header {
+				headers[header] = strings.Join(values, "\n")
+			}
+			errJSON := safeJSONMarshal(requestError{
+				Error: err.Error(),
+				Query: query,
+				HTTPResponse: HTTPResponse{
+					Method:  response.Request.Method,
+					Path:    response.Request.URL.RawPath,
+					Args:    response.Request.Form,
+					Headers: headers,
+				},
+			})
+			log.Println(errJSON)
 			time.Sleep(time.Second * 2)
 		}
 
@@ -70,11 +100,8 @@ func find_emotes(query string, mp *sync.Map, semaphore Semaphore) {
 			}{}
 			json.Unmarshal(data, &v)
 			for _, x := range v {
-				lst, ok := mp.Load(x.Code)
-				if !ok {
-					lst = any(make([]string, 0))
-				}
-				mp.Store(x.Code, append(lst.([]string), x.ID))
+				out := safeJSONMarshal(x)
+				fmt.Println(out)
 			}
 			if len(v) < bttvPageSize {
 				break
@@ -83,17 +110,29 @@ func find_emotes(query string, mp *sync.Map, semaphore Semaphore) {
 		} else if response.StatusCode == http.StatusTooManyRequests {
 			time.Sleep(time.Second * 2)
 		} else {
-			log.Println(response)
+			headers := make(map[string]string, len(response.Header))
+			for header, values := range response.Header {
+				headers[header] = strings.Join(values, "\n")
+			}
+			errJSON := safeJSONMarshal(requestError{
+				Error: "not json response",
+				Query: query,
+				HTTPResponse: HTTPResponse{
+					Method:  response.Request.Method,
+					Path:    response.Request.URL.RawPath,
+					Args:    response.Request.Form,
+					Headers: headers,
+				},
+			})
+			// TODO: replace log with print to stderr
+			log.Println(errJSON)
 		}
 	}
 }
 
 func main() {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789'"
-	var (
-		mp sync.Map
-		wg sync.WaitGroup
-	)
+	var wg sync.WaitGroup
 	semaphore := make(Semaphore, ulimit)
 	for range [ulimit]struct{}{} {
 		semaphore <- struct{}{}
@@ -105,15 +144,10 @@ func main() {
 				query := alphabet[i:i+1] + alphabet[j:j+1] + alphabet[k:k+1]
 				go func() {
 					defer wg.Done()
-					find_emotes(query, &mp, semaphore)
+					find_emotes(query, semaphore)
 				}()
 			}
 		}
 	}
 	wg.Wait()
-
-	mp.Range(func(k, v any) bool {
-		fmt.Println(k, strings.Join(v.([]string), " "))
-		return true
-	})
 }
