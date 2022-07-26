@@ -94,7 +94,7 @@ func find_emotes(query string, semaphore Semaphore) {
 	for {
 		response, data, err := doRequest(semaphore, query, offset)
 		if err != nil {
-			// TODO: fix too fast gathering
+			// TODO: fix too fast gathering, remove parallelising?
 			headers := make(map[string]string, len(response.Header))
 			for header, values := range response.Header {
 				headers[header] = strings.Join(values, "\n")
