@@ -12,9 +12,29 @@ import (
 )
 
 const (
-	bttvPageSize = 100
-	ulimit       = 500 // max number of open file descriptors
+	_bttvPageSize = 100
+	_ulimit       = 500 // max number of open file descriptors
+
+	_alphabet = "abcdefghijklmnopqrstuvwxyz0123456789'"
 )
+
+type Semaphore chan struct{}
+
+func newSemaphore(size uint) Semaphore {
+	res := make(Semaphore, _ulimit)
+	for range [_ulimit]struct{}{} {
+		res <- struct{}{}
+	}
+	return res
+}
+
+func (self Semaphore) acquire() {
+	<-self
+}
+
+func (self Semaphore) release() {
+	self <- struct{}{}
+}
 
 type HTTPResponse struct {
 	Method  string              `json:"method"`
@@ -30,17 +50,14 @@ type requestError struct {
 	Error        string       `json:"error"`
 }
 
-type Semaphore chan struct{}
-
 func emote_query_url(query string, offset uint) string {
-	return fmt.Sprintf("https://api.betterttv.net/3/emotes/shared/search?query=%s&offset=%d&limit=%d", query, offset, bttvPageSize)
+	return fmt.Sprintf("https://api.betterttv.net/3/emotes/shared/search?query=%s&offset=%d&limit=%d", query, offset, _bttvPageSize)
 }
 
 func doRequest(semaphore Semaphore, query string, offset uint) (*http.Response, []byte, error) {
-	<-semaphore // acquire
-	defer func() {
-		semaphore <- struct{}{} // release
-	}()
+	semaphore.acquire()
+	defer semaphore.release()
+
 	response, err := http.Get(emote_query_url(query, offset))
 	if err != nil {
 		return nil, nil, err
@@ -103,10 +120,10 @@ func find_emotes(query string, semaphore Semaphore) {
 				out := safeJSONMarshal(x)
 				fmt.Println(out)
 			}
-			if len(v) < bttvPageSize {
+			if len(v) < _bttvPageSize {
 				break
 			}
-			offset += bttvPageSize
+			offset += _bttvPageSize
 		} else if response.StatusCode == http.StatusTooManyRequests {
 			time.Sleep(time.Second * 2)
 		} else {
@@ -131,17 +148,13 @@ func find_emotes(query string, semaphore Semaphore) {
 }
 
 func main() {
-	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789'"
 	var wg sync.WaitGroup
-	semaphore := make(Semaphore, ulimit)
-	for range [ulimit]struct{}{} {
-		semaphore <- struct{}{}
-	}
-	wg.Add(len(alphabet) * len(alphabet) * len(alphabet))
-	for i := range alphabet {
-		for j := range alphabet {
-			for k := range alphabet {
-				query := alphabet[i:i+1] + alphabet[j:j+1] + alphabet[k:k+1]
+	semaphore := newSemaphore(_ulimit)
+	wg.Add(len(_alphabet) * len(_alphabet) * len(_alphabet))
+	for i := range _alphabet {
+		for j := range _alphabet {
+			for k := range _alphabet {
+				query := _alphabet[i:i+1] + _alphabet[j:j+1] + _alphabet[k:k+1]
 				go func() {
 					defer wg.Done()
 					find_emotes(query, semaphore)
