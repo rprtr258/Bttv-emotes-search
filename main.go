@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,23 +51,32 @@ type requestError struct {
 	Error        string       `json:"error"`
 }
 
-func emote_query_url(query string, offset uint) string {
-	return fmt.Sprintf("https://api.betterttv.net/3/emotes/shared/search?query=%s&offset=%d&limit=%d", query, offset, _bttvPageSize)
-}
-
 func doRequest(semaphore Semaphore, query string, offset uint) (*http.Response, []byte, error) {
 	semaphore.acquire()
 	defer semaphore.release()
 
-	response, err := http.Get(emote_query_url(query, offset))
+	request, err := http.NewRequest(http.MethodGet, "https://api.betterttv.net/3/emotes/shared/search", nil)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	q := request.URL.Query()
+	q.Set("query", query)
+	q.Set("offset", strconv.FormatUint(uint64(offset), 10))
+	q.Set("limit", strconv.Itoa(_bttvPageSize))
+	request.URL.RawQuery = q.Encode()
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer response.Body.Close()
+
 	data, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		return nil, nil, err
 	}
-	response.Body.Close()
+
 	return response, data, nil
 }
 
