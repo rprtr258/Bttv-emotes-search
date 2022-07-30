@@ -1,7 +1,0 @@
-version: '3'
-
-tasks:
-  run:
-    desc: Run emotes data collection pipeline
-    cmds:
-      - go run main.go
