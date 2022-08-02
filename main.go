@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,22 +19,26 @@ const (
 	_alphabet = "abcdefghijklmnopqrstuvwxyz0123456789'"
 )
 
-type Semaphore chan struct{}
+type Semaphore struct {
+	ch chan struct{}
+}
 
 func newSemaphore(size uint) Semaphore {
-	res := make(Semaphore, _ulimit)
+	res := Semaphore{
+		ch: make(chan struct{}, _ulimit),
+	}
 	for range [_ulimit]struct{}{} {
-		res <- struct{}{}
+		res.ch <- struct{}{}
 	}
 	return res
 }
 
-func (self Semaphore) acquire() {
-	<-self
+func (self *Semaphore) acquire() {
+	<-self.ch
 }
 
-func (self Semaphore) release() {
-	self <- struct{}{}
+func (self *Semaphore) release() {
+	self.ch <- struct{}{}
 }
 
 type HTTPResponse struct {
@@ -49,6 +53,7 @@ type requestError struct {
 	Query        string       `json:"query"`
 	HTTPResponse HTTPResponse `json:"http_response"`
 	Error        string       `json:"error"`
+	Body         string       `json:"body"`
 }
 
 func doRequest(semaphore Semaphore, query string, offset uint) (*http.Response, []byte, error) {
@@ -83,10 +88,32 @@ func doRequest(semaphore Semaphore, query string, offset uint) (*http.Response, 
 func safeJSONMarshal[A any](v A) string {
 	res, err := json.Marshal(v)
 	if err != nil {
-		// TODO: escape json string
-		panic(fmt.Sprintf("error marshaling %+v: %s", v, err.Error()))
+		return fmt.Sprintf(`{
+	"error marshaling": {
+		"value": %q,
+		"error": %q
+	}
+}`, fmt.Sprint(v), err.Error())
 	}
 	return string(res)
+}
+
+func toErrorLine(response *http.Response, query string, err string, data []byte) string {
+	headers := make(map[string]string, len(response.Header))
+	for header, values := range response.Header {
+		headers[header] = strings.Join(values, "\n")
+	}
+	return safeJSONMarshal(requestError{
+		Error: err,
+		Query: query,
+		HTTPResponse: HTTPResponse{
+			Method:  response.Request.Method,
+			Path:    response.Request.URL.RawPath,
+			Args:    response.Request.Form,
+			Headers: headers,
+		},
+		Body: string(data),
+	})
 }
 
 func find_emotes(query string, semaphore Semaphore) {
@@ -95,21 +122,8 @@ func find_emotes(query string, semaphore Semaphore) {
 		response, data, err := doRequest(semaphore, query, offset)
 		if err != nil {
 			// TODO: fix too fast gathering, remove parallelising?
-			headers := make(map[string]string, len(response.Header))
-			for header, values := range response.Header {
-				headers[header] = strings.Join(values, "\n")
-			}
-			errJSON := safeJSONMarshal(requestError{
-				Error: err.Error(),
-				Query: query,
-				HTTPResponse: HTTPResponse{
-					Method:  response.Request.Method,
-					Path:    response.Request.URL.RawPath,
-					Args:    response.Request.Form,
-					Headers: headers,
-				},
-			})
-			log.Println(errJSON)
+			errJSON := toErrorLine(response, query, err.Error(), data)
+			fmt.Fprintln(os.Stderr, errJSON)
 			time.Sleep(time.Second * 2)
 		}
 
@@ -128,7 +142,7 @@ func find_emotes(query string, semaphore Semaphore) {
 			json.Unmarshal(data, &v)
 			for _, x := range v {
 				out := safeJSONMarshal(x)
-				fmt.Println(out)
+				fmt.Fprintln(os.Stdout, out)
 			}
 			if len(v) < _bttvPageSize {
 				break
@@ -137,22 +151,8 @@ func find_emotes(query string, semaphore Semaphore) {
 		} else if response.StatusCode == http.StatusTooManyRequests {
 			time.Sleep(time.Second * 2)
 		} else {
-			headers := make(map[string]string, len(response.Header))
-			for header, values := range response.Header {
-				headers[header] = strings.Join(values, "\n")
-			}
-			errJSON := safeJSONMarshal(requestError{
-				Error: "not json response",
-				Query: query,
-				HTTPResponse: HTTPResponse{
-					Method:  response.Request.Method,
-					Path:    response.Request.URL.RawPath,
-					Args:    response.Request.Form,
-					Headers: headers,
-				},
-			})
-			// TODO: replace log with print to stderr
-			log.Println(errJSON)
+			errJSON := toErrorLine(response, query, "not json response", data)
+			fmt.Fprintln(os.Stderr, errJSON)
 		}
 	}
 }
