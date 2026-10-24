@@ -3,7 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"iter"
 	"net/http"
 	"os"
 	"strconv"
@@ -25,20 +26,20 @@ type Semaphore struct {
 
 func newSemaphore(size uint) Semaphore {
 	res := Semaphore{
-		ch: make(chan struct{}, _ulimit),
+		ch: make(chan struct{}, size),
 	}
-	for range [_ulimit]struct{}{} {
+	for range size {
 		res.ch <- struct{}{}
 	}
 	return res
 }
 
-func (self *Semaphore) acquire() {
-	<-self.ch
+func (s *Semaphore) acquire() {
+	<-s.ch
 }
 
-func (self *Semaphore) release() {
-	self.ch <- struct{}{}
+func (s *Semaphore) release() {
+	s.ch <- struct{}{}
 }
 
 type HTTPResponse struct {
@@ -75,9 +76,9 @@ func doRequest(semaphore Semaphore, query string, offset uint) (*http.Response, 
 	if err != nil {
 		return nil, nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
-	data, err := ioutil.ReadAll(response.Body)
+	data, err := io.ReadAll(response.Body)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,10 +140,10 @@ func find_emotes(query string, semaphore Semaphore) {
 					ProviderID  string `json:"providerId"`
 				} `json:"user"`
 			}{}
-			json.Unmarshal(data, &v)
+			_ = json.Unmarshal(data, &v)
 			for _, x := range v {
 				out := safeJSONMarshal(x)
-				fmt.Fprintln(os.Stdout, out)
+				_, _ = fmt.Fprintln(os.Stdout, out)
 			}
 			if len(v) < _bttvPageSize {
 				break
@@ -157,20 +158,29 @@ func find_emotes(query string, semaphore Semaphore) {
 	}
 }
 
+func alphiter(yield func(string) bool) {
+	for _, i := range _alphabet {
+		for _, j := range _alphabet {
+			for _, k := range _alphabet {
+				if !yield(string([]rune{i, j, k})) {
+					return
+				}
+			}
+		}
+	}
+}
+
+var _ iter.Seq[string] = alphiter
+
 func main() {
 	var wg sync.WaitGroup
 	semaphore := newSemaphore(_ulimit)
 	wg.Add(len(_alphabet) * len(_alphabet) * len(_alphabet))
-	for i := range _alphabet {
-		for j := range _alphabet {
-			for k := range _alphabet {
-				query := _alphabet[i:i+1] + _alphabet[j:j+1] + _alphabet[k:k+1]
-				go func() {
-					defer wg.Done()
-					find_emotes(query, semaphore)
-				}()
-			}
-		}
+	for query := range alphiter {
+		go func() {
+			defer wg.Done()
+			find_emotes(query, semaphore)
+		}()
 	}
 	wg.Wait()
 }

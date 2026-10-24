@@ -19,10 +19,12 @@ type entry struct {
 
 func run() error {
 	if len(os.Args) == 1 {
-		return errors.New("Usage: query [query]")
+		fmt.Println("Usage: query [query]")
+		return errors.New("")
 	}
 	if len(os.Args) > 2 {
-		return errors.New("Too many arguments")
+		fmt.Println("Too many arguments")
+		return errors.New("")
 	}
 	query := os.Args[1]
 

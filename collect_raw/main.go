@@ -41,7 +41,7 @@ func get(client *http.Client, query string, offset int) (*http.Response, []byte,
 	if err != nil {
 		return nil, nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
 		return nil, nil, err
